@@ -1,0 +1,73 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Installierte Xcode-Versionen anzeigen
+        run: ls /Applications | grep Xcode
+
+      - name: Neueste installierte Xcode-Version auswählen
+        run: |
+          LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)
+          echo "Wähle: $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: XcodeGen installieren
+        run: brew install xcodegen
+
+      - name: Xcode-Projekt generieren
+        run: xcodegen generate
+
+      - name: Xcode-Version anzeigen
+        run: xcodebuild -version
+
+      - name: Unsigned Build erstellen
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project SpotifyClone.xcodeproj \
+            -scheme SpotifyClone \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            EXPANDED_CODE_SIGN_IDENTITY="-" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: App-Bundle finden
+        id: find_app
+        run: |
+          APP_PATH=$(find "$PWD/build/DerivedData" -maxdepth 6 -name "SpotifyClone.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Konnte SpotifyClone.app nicht finden. Build-Output oben prüfen."
+            exit 1
+          fi
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: IPA packen (Payload-Struktur)
+        run: |
+          mkdir -p "$PWD/build/Payload"
+          cp -r "${{ steps.find_app.outputs.app_path }}" "$PWD/build/Payload/"
+          cd "$PWD/build" && zip -r SpotifyClone-unsigned.ipa Payload
+
+      - name: IPA als Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotifyClone-unsigned-ipa
+          path: build/SpotifyClone-unsigned.ipa
+          if-no-files-found: error
